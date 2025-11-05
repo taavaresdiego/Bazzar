@@ -1,113 +1,89 @@
 import express from "express";
 import passport from "passport";
-import localStrategy from "passport-local";
+import { Strategy as LocalStrategy } from "passport-local"; //
 import crypto from "crypto";
-import { Mongo } from "./database/mongodb.js";
+import { Mongo } from "../database/mongodb.js";
 import jwt from "jsonwebtoken";
 import { ObjectId } from "mongodb";
 
 const collectionName = "users";
 
-passport.use(
-  new localStrategy(
-    {
-      usernameField: "email",
-      passwordField: "password",
-    },
-    async (email, password, callback) => {
-      const user = await Mongo.db
-        .collection(collectionName)
-        .findOne({ email: email });
-
-      if (!user) {
-        return callback(null, false);
-      }
-      const saltBuffer = user.salt.saltBuffer;
-
-      crypto.pbkdf2(
-        password,
-        saltBuffer,
-        310000,
-        16,
-        "sha256",
-        (err, hashedPassword) => {
-          if (err) {
-            return callback(null, false);
-          }
-
-          const userPasswordBuffer = Buffer.from(user.password.buffer);
-
-          if (!crypto.timingSafeEqual(userPasswordBuffer, hashedPassword)) {
-            return callback(null, false);
-          }
-
-          const { password, salt, ...rest } = user;
-
-          return callback(null, rest);
-        }
-      );
-    }
-  )
-);
-const authRouter = express.Router();
-
-authRouter.post("/signup", async (req, res) => {
-  const checkUser = await Mongo.db
-    .collection(collectionName)
-    .findOne({ email: req.body.email });
-
-  if (checkUser) {
-    return res.status(500).send({
-      sucess: false,
-      statusCode: 500,
-      body: {
-        text: "User already exists",
+export function setupAuthRoutes(app) {
+  passport.use(
+    new LocalStrategy(
+      {
+        usernameField: "email",
+        passwordField: "password",
       },
-    });
-  }
-  const salt = crypto.randomBytes(16);
-  crypto.pbkdf2(
-    req.body.password,
-    salt,
-    310000,
-    16,
-    "sha256",
-    async (err, hashedPassword) => {
-      if (err) {
-        return res.status(500).send({
-          sucess: false,
-          statusCode: 500,
-          body: {
-            text: "Internal server error",
-            error: err,
-          },
-        });
-      }
-      const result = await Mongo.db.collection(collectionName).insertOne({
-        email: req.body.email,
-        password: hashedPassword,
-        salt,
-      });
+      async (email, password, callback) => {
+        try {
+          const user = await Mongo.db
+            .collection(collectionName)
+            .findOne({ email: email });
 
-      if (result.insertedId) {
-        const user = await Mongo.db.collection(collectionName).findOne({
-          _id: new ObjectId(result.insertedId),
-        });
-        const token = jwt.sign(user, "secre");
+          if (!user) {
+            return callback(null, false);
+          }
 
-        return res.status(200).send({
-          sucess: true,
-          statusCode: 200,
-          body: {
-            text: "User registred",
-            token,
-            user,
-            logged: true,
-          },
-        });
+          const saltBuffer = user.salt;
+
+          crypto.pbkdf2(
+            password,
+            saltBuffer,
+            310000,
+            16,
+            "sha256",
+            (err, hashedPassword) => {
+              if (err) {
+                return callback(err);
+              }
+
+              const userPasswordBuffer = Buffer.from(user.password);
+
+              if (!crypto.timingSafeEqual(userPasswordBuffer, hashedPassword)) {
+                return callback(null, false);
+              }
+              const { password, salt, ...rest } = user;
+
+              return callback(null, rest);
+            }
+          );
+        } catch (error) {
+          return callback(error);
+        }
       }
-    }
+    )
   );
-});
 
-export default authRouter;
+  const authRouter = express.Router();
+
+  authRouter.post("/signup", async (req, res) => {
+    try {
+      const checkUser = await Mongo.db
+        .collection(collectionName)
+        .findOne({ email: req.body.email });
+
+      if (checkUser) {
+        return res.status(409).send({
+          sucess: false,
+          statusCode: 409,
+          body: {
+            text: "User already exists",
+          },
+        });
+      }
+
+      res.status(201).send({
+        sucess: true,
+        text: "Usuário pronto para ser criado (lógica de criação pendente)",
+      });
+    } catch (error) {
+      console.error("Erro no /signup:", error);
+      res
+        .status(500)
+        .send({ text: "Erro interno no servidor", error: error.message });
+    }
+  });
+
+  return authRouter;
+}
